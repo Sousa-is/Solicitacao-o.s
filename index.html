@@ -819,7 +819,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-  // Configuração da API do Google Apps Script (substitua pelos seus valores)
+
   const API_URL = "https://script.google.com/macros/s/AKfycbzGwo-pqX_ZnJv8yJplbRgReJaUIZ-vLdL5OyJ-8fCdYZCkGwu4GwipEqvH64vBa_c5/exec";
 
   const API_TOKEN = "CrVcx7H88y7Eg9qAbjRIKidYSnCY6CNc";
@@ -845,7 +845,7 @@
   let modalEditarSolInstancia = null;
 
   async function chamarApi(acao, payload) {
-    if (!API_URL || API_URL.indexOf("COLE_AQUI") === 0) {
+    if (!API_URL || API_URL.indexOf("COLE_AQUI") === 0 || API_URL.trim() === "----------") {
       throw new Error("Configure a constante API_URL no index.html antes de usar.");
     }
 
@@ -1131,9 +1131,7 @@
                   const res = await zxingReader.decodeFromImageUrl(imgUrl);
                   const texto = res && res.getText ? res.getText() : String(res || "");
                   if (processarTextoEncontrado(texto)) return;
-                } catch (e) {
-                  // Continua no próximo quadro
-                }
+                } catch (e) {}
               }
             }
           } finally {
@@ -1729,7 +1727,6 @@
         }
       }
     } else if (numeros.length === 50) {
-      // Layout chave NFS-e Nacional (50 dígitos)
       const blocoInscricao15 = numeros.substring(9, 24);
       const cnpj50 = blocoInscricao15.startsWith("0")
         ? blocoInscricao15.substring(1, 15)

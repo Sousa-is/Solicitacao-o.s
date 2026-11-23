@@ -356,7 +356,7 @@
           </div>
           <div class="col-md-5">
             <input type="text" id="filtroPendencias" class="form-control form-control-sm"
-              placeholder="Filtrar pendências por protocolo, NF, cliente, andamento ou contato..." oninput="renderizarPendencias()">
+              placeholder="Filtrar pendências por protocolo, NF, cliente, fornecedor, andamento..." oninput="renderizarPendencias()">
           </div>
           <div class="col-md-3 d-flex gap-2 justify-content-md-end">
             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="carregarPendencias()">Atualizar Fila</button>
@@ -370,7 +370,7 @@
                 <th>Protocolo</th>
                 <th>Data</th>
                 <th>Espera</th>
-                <th>NF Dev.</th>
+                <th>NF Dev. / Origem</th>
                 <th>Cliente / Fornecedor</th>
                 <th>Valor</th>
                 <th>Último Andamento / Contato</th>
@@ -927,8 +927,7 @@
     }
 
     carregarTabela();
-    carregarPendencias();
-    carregarSolicitacoes();
+    carregarSolicitacoes().then(() => carregarPendencias());
   };
 
   function criarHintsZXing() {
@@ -1360,7 +1359,7 @@
     if (isIntegracao) {
       carregarTabela();
     } else if (isPendencias) {
-      carregarPendencias();
+      carregarSolicitacoes().then(() => carregarPendencias());
     } else if (isSolicitacoes) {
       carregarSolicitacoes();
     }
@@ -1967,7 +1966,7 @@
             infoChave.innerHTML = `NF-e (44 dígitos) • <span class="text-warning">Sem razão social na BrasilAPI. Preencha o fornecedor.</span>`;
           }
         } catch (erro) {
-          infoChave.innerHTML = `NF-e (44 dígitos) • <span class="text-warning">${erro.message}</span>`;
+          infoChave.innerHTML = `NF-e (44 dígitos) • <span class="text-warning">Não foi possível consultar o CNPJ <strong>${cnpjFormatado}</strong> agora. Preencha o fornecedor manualmente.</span>`;
         }
       }
     } else if (numeros.length === 50) {
@@ -1996,7 +1995,7 @@
             infoChave.innerHTML = `NFS-e (50 dígitos) • <span class="text-warning">Sem razão social na BrasilAPI. Preencha o fornecedor.</span>`;
           }
         } catch (erro) {
-          infoChave.innerHTML = `NFS-e (50 dígitos) • <span class="text-warning">${erro.message}</span>`;
+          infoChave.innerHTML = `NFS-e (50 dígitos) • <span class="text-warning">Não foi possível consultar o CNPJ <strong>${cnpjFormatado}</strong> agora. Preencha o fornecedor manualmente.</span>`;
         }
       }
     } else if (numeros.length > 0) {
@@ -2044,8 +2043,7 @@
         document.getElementById("infoChave").textContent =
           "Ao informar os 44 dígitos, o número da nota é extraído e o fornecedor é consultado na BrasilAPI.";
         carregarTabela();
-        carregarPendencias();
-        carregarSolicitacoes();
+        carregarSolicitacoes().then(() => carregarPendencias());
       }
     } catch (erro) {
       mostrarAlerta("Erro de comunicação: " + erro.message, "danger");
@@ -2089,7 +2087,7 @@
         limparAnexos();
         document.getElementById("infoChaveSol").textContent =
           "Na leitura de QR Code ou chave de NFS-e, apenas os números são extraídos. Reconhece NF-e (44 dígitos) e NFS-e (50 dígitos) via BrasilAPI.";
-        carregarSolicitacoes();
+        carregarSolicitacoes().then(() => renderizarPendencias());
       }
     } catch (erro) {
       mostrarAlerta("Erro de comunicação: " + erro.message, "danger");
@@ -2211,10 +2209,14 @@
       ? pendenciasCache
       : pendenciasCache.filter(item => {
           const ult = item.ultimoAcompanhamento || {};
+          const solVinculada = solicitacoesCache.find(s =>
+            String(s.numNotaFornecedor || "").replace(/\D/g, "").replace(/^0+/, "") ===
+            String(item.notaOrigem || "").replace(/\D/g, "").replace(/^0+/, "")
+          );
           return [
             item.protocolo, item.data, item.tempoEspera, item.notaDev,
-            item.notaOrigem, item.cliente, item.valor, item.motivo,
-            ult.andamento, ult.contato, ult.canal, ult.observacao
+            item.notaOrigem, item.cliente, solVinculada?.fornecedor,
+            item.valor, item.motivo, ult.andamento, ult.contato, ult.canal, ult.observacao
           ].some(v => String(v || "").toLowerCase().includes(termo));
         });
 
@@ -2238,6 +2240,15 @@
            <div class="small mt-1"><strong>Contato:</strong> ${escaparHTML(ult.contato || "—")}${ult.observacao ? " — " + escaparHTML(ult.observacao) : ""}</div>`
         : `<span class="text-muted small">Sem ligação/andamento registrado</span>`;
 
+      const nfOrigemTexto = item.notaOrigem ? item.notaOrigem : "—";
+      const solVinculada = solicitacoesCache.find(s =>
+        String(s.numNotaFornecedor || "").replace(/\D/g, "").replace(/^0+/, "") ===
+        String(item.notaOrigem || "").replace(/\D/g, "").replace(/^0+/, "")
+      );
+      const fornecedorTexto = (solVinculada && solVinculada.fornecedor)
+        ? String(solVinculada.fornecedor).trim()
+        : (item.cliente || "—");
+
       tbody.innerHTML += `
         <tr>
           <td>
@@ -2249,8 +2260,14 @@
           </td>
           <td>${escaparHTML(item.data)}</td>
           <td><span class="badge bg-light text-dark border">${escaparHTML(item.tempoEspera)}</span></td>
-          <td>${escaparHTML(item.notaDev)}</td>
-          <td class="wrap-col">${escaparHTML(item.cliente)}</td>
+          <td>
+            <div><strong>${escaparHTML(item.notaDev)}</strong></div>
+            <div class="small text-muted">Origem: <strong>${escaparHTML(nfOrigemTexto)}</strong></div>
+          </td>
+          <td class="wrap-col">
+            <div>${escaparHTML(item.cliente)}</div>
+            <div class="small text-success">Fornecedor: <strong>${escaparHTML(fornecedorTexto)}</strong></div>
+          </td>
           <td>${escaparHTML(item.valor)}</td>
           <td class="wrap-col">${resumoAcomp}</td>
           <td>
@@ -2519,7 +2536,7 @@
       mostrarAlerta(res.mensagem, res.sucesso ? "success" : "danger");
       if (res.sucesso) {
         if (modalEditarSolInstancia) modalEditarSolInstancia.hide();
-        carregarSolicitacoes();
+        carregarSolicitacoes().then(() => renderizarPendencias());
       }
     } catch (erro) {
       mostrarAlerta("Erro ao atualizar solicitação: " + erro.message, "danger");
@@ -2551,7 +2568,7 @@
       const res = await chamarApi("excluirSolicitacaoNF", { protocolo: protocolo });
       mostrarAlerta(res.mensagem, res.sucesso ? "success" : "danger");
       if (res.sucesso) {
-        carregarSolicitacoes();
+        carregarSolicitacoes().then(() => renderizarPendencias());
       }
     } catch (erro) {
       mostrarAlerta("Erro ao excluir solicitação: " + erro.message, "danger");
@@ -2566,7 +2583,7 @@
     document.getElementById("acompProtocolo").value = protocolo;
     document.getElementById("acompProtocoloTexto").textContent = protocolo;
     document.getElementById("acompSubtituloTexto").textContent = registro
-      ? `${registro.cliente || "—"} • NF Dev: ${registro.notaDev || "—"} • ${registro.valor || ""}${registro.status ? " • Status: " + registro.status : ""}`
+      ? `${registro.cliente || "—"} • NF Dev: ${registro.notaDev || "—"} • Origem: ${registro.notaOrigem || "—"} • ${registro.valor || ""}${registro.status ? " • Status: " + registro.status : ""}`
       : "";
 
     document.getElementById("formAcompanhamento").reset();

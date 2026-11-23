@@ -457,28 +457,50 @@
               <input type="text" class="form-control" id="solSolicitante" placeholder="Quem pediu / contato">
             </div>
 
-            <!-- Campo de Anexo opcional para QUALQUER solicitação (Galeria/Arquivo ou Câmera na hora) -->
+            <!-- Campo de Anexo opcional para QUALQUER solicitação (Múltiplos Arquivos, Câmera ou Gravação de Áudio) -->
             <div class="col-12" id="boxAnexoRecusa">
               <div class="border rounded-3 p-3 bg-light">
                 <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-2">
-                  <label class="form-label fw-semibold mb-0">📎 Anexos da Solicitação (Opcional — Galeria, Arquivo ou Foto na Hora)</label>
+                  <label class="form-label fw-semibold mb-0">📎 Anexos da Solicitação (Opcional — Vários Arquivos, Fotos ou Áudio)</label>
                   <div class="d-flex gap-2 flex-wrap">
                     <button type="button" class="btn btn-sm btn-outline-primary"
                       onclick="document.getElementById('solAnexosArquivo').click()">
-                      📁 Escolher Arquivo / Galeria
+                      📁 Escolher Arquivos / Galeria
                     </button>
                     <button type="button" class="btn btn-sm btn-outline-success"
                       onclick="document.getElementById('solAnexosCamera').click()">
                       📸 Tirar Foto Agora
                     </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" id="btnGravarAudio"
+                      onclick="alternarGravacaoAudio()">
+                      🎙️ Gravar Áudio
+                    </button>
                   </div>
                 </div>
-                <input type="file" id="solAnexosArquivo" multiple accept="image/*,application/pdf,.pdf" class="d-none"
+
+                <div id="boxGravacaoAudio" class="border rounded-3 p-2 mb-2 bg-white d-none">
+                  <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap">
+                    <div class="d-flex align-items-center gap-2">
+                      <span class="badge bg-danger">● GRAVANDO</span>
+                      <span class="fw-semibold small" id="tempoGravacaoAudio">00:00</span>
+                    </div>
+                    <div class="d-flex gap-2">
+                      <button type="button" class="btn btn-sm btn-danger" onclick="pararGravacaoAudio(true)">
+                        ⏹️ Parar e Anexar
+                      </button>
+                      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="pararGravacaoAudio(false)">
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <input type="file" id="solAnexosArquivo" multiple accept="image/*,application/pdf,.pdf,audio/*" class="d-none"
                   onchange="aoSelecionarAnexos(this)">
-                <input type="file" id="solAnexosCamera" accept="image/*" capture="environment" class="d-none"
+                <input type="file" id="solAnexosCamera" multiple accept="image/*" capture="environment" class="d-none"
                   onchange="aoSelecionarAnexos(this)">
                 <div class="form-text">
-                  Opcional para qualquer solicitação: escolha arquivos/fotos da galeria ou tire uma foto na hora (até ~4 MB por arquivo).
+                  Opcional para qualquer solicitação: anexe vários arquivos/fotos ou grave um áudio na hora (fotos são otimizadas automaticamente no celular; PDFs e áudios até 4 MB cada).
                 </div>
                 <div class="mt-2 small" id="listaAnexosSelecionados"></div>
               </div>
@@ -824,6 +846,7 @@
 
   const API_TOKEN = "CrVcx7H88y7Eg9qAbjRIKidYSnCY6CNc";
 
+
   let ultimaChaveConsultada = "";
   let ultimaChaveSolConsultada = "";
   let registrosCache = [];
@@ -843,6 +866,13 @@
   let modalAcompInstancia = null;
   let modalSolHistInstancia = null;
   let modalEditarSolInstancia = null;
+
+  let mediaRecorderAtual = null;
+  let chunksAudioGravado = [];
+  let streamAudioAtivo = null;
+  let mimeAudioAtual = "audio/webm";
+  let timerAudioInterval = null;
+  let segundosGravacao = 0;
 
   async function chamarApi(acao, payload) {
     if (!API_URL || API_URL.indexOf("COLE_AQUI") === 0 || API_URL.trim() === "----------") {
@@ -1310,6 +1340,7 @@
 
   function trocarAba(aba) {
     pararCameraLeitor();
+    pararGravacaoAudio(false);
 
     const isIntegracao = aba === "integracao";
     const isPendencias = aba === "pendencias";
@@ -1337,7 +1368,164 @@
     }
   }
 
+  function formatarTempoSegundos(seg) {
+    const min = String(Math.floor(seg / 60)).padStart(2, "0");
+    const rest = String(seg % 60)).padStart(2, "0");
+    return `${min}:${rest}`;
+  }
+
+  function escolherMimeAudioSuportado() {
+    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return "audio/webm";
+    const candidatos = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/aac",
+      "audio/ogg;codecs=opus"
+    ];
+    for (const mime of candidatos) {
+      if (MediaRecorder.isTypeSupported(mime)) return mime;
+    }
+    return "";
+  }
+
+  async function alternarGravacaoAudio() {
+    if (mediaRecorderAtual && mediaRecorderAtual.state === "recording") {
+      pararGravacaoAudio(true);
+      return;
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+      mostrarAlerta("Gravação de áudio não suportada neste navegador ou exige HTTPS.", "warning");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamAudioAtivo = stream;
+      chunksAudioGravado = [];
+      segundosGravacao = 0;
+
+      const mimeEscolhido = escolherMimeAudioSuportado();
+      mimeAudioAtual = mimeEscolhido || "audio/webm";
+      mediaRecorderAtual = mimeEscolhido
+        ? new MediaRecorder(stream, { mimeType: mimeEscolhido })
+        : new MediaRecorder(stream);
+
+      mediaRecorderAtual.ondataavailable = function(event) {
+        if (event.data && event.data.size > 0) {
+          chunksAudioGravado.push(event.data);
+        }
+      };
+
+      mediaRecorderAtual.start(250);
+
+      document.getElementById("boxGravacaoAudio").classList.remove("d-none");
+      document.getElementById("tempoGravacaoAudio").textContent = "00:00";
+      const btnAudio = document.getElementById("btnGravarAudio");
+      if (btnAudio) {
+        btnAudio.classList.remove("btn-outline-danger");
+        btnAudio.classList.add("btn-danger");
+        btnAudio.textContent = "⏹️ Parar Áudio";
+      }
+
+      timerAudioInterval = setInterval(() => {
+        segundosGravacao++;
+        const elTempo = document.getElementById("tempoGravacaoAudio");
+        if (elTempo) elTempo.textContent = formatarTempoSegundos(segundosGravacao);
+      }, 1000);
+    } catch (erro) {
+      limparRecursosAudio();
+      mostrarAlerta("Não foi possível acessar o microfone: " + (erro.message || "verifique a permissão."), "danger");
+    }
+  }
+
+  function limparRecursosAudio() {
+    if (timerAudioInterval) {
+      clearInterval(timerAudioInterval);
+      timerAudioInterval = null;
+    }
+    if (streamAudioAtivo) {
+      streamAudioAtivo.getTracks().forEach(t => {
+        try { t.stop(); } catch (e) {}
+      });
+      streamAudioAtivo = null;
+    }
+    mediaRecorderAtual = null;
+    chunksAudioGravado = [];
+    segundosGravacao = 0;
+
+    const box = document.getElementById("boxGravacaoAudio");
+    if (box) box.classList.add("d-none");
+    const btnAudio = document.getElementById("btnGravarAudio");
+    if (btnAudio) {
+      btnAudio.classList.remove("btn-danger");
+      btnAudio.classList.add("btn-outline-danger");
+      btnAudio.textContent = "🎙️ Gravar Áudio";
+    }
+  }
+
+  function pararGravacaoAudio(salvarAnexo) {
+    if (!mediaRecorderAtual) {
+      limparRecursosAudio();
+      return;
+    }
+
+    const recorder = mediaRecorderAtual;
+    const mimeFinal = recorder.mimeType || mimeAudioAtual || "audio/webm";
+    const chunks = chunksAudioGravado.slice();
+
+    recorder.onstop = function() {
+      limparRecursosAudio();
+      if (!salvarAnexo || chunks.length === 0) return;
+
+      const blob = new Blob(chunks, { type: mimeFinal });
+      const limiteBytes = 4 * 1024 * 1024;
+      if (blob.size > limiteBytes) {
+        mostrarAlerta("O áudio gravado passou de 4 MB. Grave um trecho menor.", "warning");
+        return;
+      }
+
+      const extensao = mimeFinal.includes("mp4") || mimeFinal.includes("aac")
+        ? "m4a"
+        : mimeFinal.includes("ogg")
+          ? "ogg"
+          : "webm";
+
+      const reader = new FileReader();
+      reader.onload = function() {
+        const resultado = String(reader.result || "");
+        const partes = resultado.split(",");
+        const base64 = partes.length > 1 ? partes[1] : "";
+        if (!base64) {
+          mostrarAlerta("Não foi possível preparar o áudio anexado.", "warning");
+          return;
+        }
+        anexosPreparados.push({
+          nome: `audio_${Date.now()}.${extensao}`,
+          tipo: mimeFinal,
+          tamanho: blob.size,
+          base64: base64
+        });
+        renderizarAnexosSelecionados();
+        mostrarAlerta("Áudio anexado à solicitação!", "success");
+      };
+      reader.readAsDataURL(blob);
+    };
+
+    try {
+      if (recorder.state !== "inactive") {
+        recorder.stop();
+      } else {
+        limparRecursosAudio();
+      }
+    } catch (e) {
+      limparRecursosAudio();
+    }
+  }
+
   function limparAnexos() {
+    pararGravacaoAudio(false);
     anexosPreparados = [];
     const inputArq = document.getElementById("solAnexosArquivo");
     const inputCam = document.getElementById("solAnexosCamera");
@@ -1347,7 +1535,61 @@
     if (listaEl) listaEl.innerHTML = "";
   }
 
+  function comprimirImagemSeNecessario(file, maxLargura = 1600, qualidade = 0.8) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = function () {
+        const img = new Image();
+        img.onload = function () {
+          let w = img.naturalWidth || img.width;
+          let h = img.naturalHeight || img.height;
+
+          if (w > maxLargura) {
+            h = Math.round((h * maxLargura) / w);
+            w = maxLargura;
+          }
+
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+
+          const dataUrl = canvas.toDataURL("image/jpeg", qualidade);
+          const partes = dataUrl.split(",");
+          const base64 = partes.length > 1 ? partes[1] : "";
+          const tamanhoAprox = Math.round((base64.length * 3) / 4);
+          const nomeBase = (file.name && file.name.trim())
+            ? file.name.replace(/\.[^/.]+$/, "") + ".jpg"
+            : `foto_celular_${Date.now()}.jpg`;
+
+          resolve({
+            nome: nomeBase,
+            tipo: "image/jpeg",
+            tamanho: tamanhoAprox,
+            base64: base64
+          });
+        };
+        img.onerror = function () {
+          reject(new Error("Não foi possível processar a imagem."));
+        };
+        img.src = reader.result;
+      };
+      reader.onerror = function () {
+        reject(new Error("Falha ao ler a imagem: " + (file.name || "foto")));
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
   function lerArquivoComoBase64(file) {
+    const ehImagem = String(file.type || "").startsWith("image/") ||
+      /\.(jpe?g|png|webp|heic|heif)$/i.test(String(file.name || ""));
+
+    if (ehImagem) {
+      return comprimirImagemSeNecessario(file);
+    }
+
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = function() {
@@ -1355,14 +1597,14 @@
         const partes = resultado.split(",");
         const base64 = partes.length > 1 ? partes[1] : "";
         resolve({
-          nome: file.name,
+          nome: file.name || `anexo_${Date.now()}`,
           tipo: file.type || "application/octet-stream",
           tamanho: file.size || 0,
           base64: base64
         });
       };
       reader.onerror = function() {
-        reject(new Error("Falha ao ler o arquivo: " + file.name));
+        reject(new Error("Falha ao ler o arquivo: " + (file.name || "anexo")));
       };
       reader.readAsDataURL(file);
     });
@@ -1377,14 +1619,18 @@
     const rejeitados = [];
 
     arquivos.forEach(arq => {
-      const ehImagem = String(arq.type || "").startsWith("image/");
-      const ehPdf = String(arq.type || "") === "application/pdf" || String(arq.name || "").toLowerCase().endsWith(".pdf");
-      if (!ehImagem && !ehPdf) {
-        rejeitados.push(`${arq.name} (formato não suportado — use imagem ou PDF)`);
+      const tipo = String(arq.type || "").toLowerCase();
+      const nome = String(arq.name || "").toLowerCase();
+      const ehImagem = tipo.startsWith("image/") || /\.(jpe?g|png|webp|heic|heif)$/.test(nome);
+      const ehPdf = tipo === "application/pdf" || nome.endsWith(".pdf");
+      const ehAudio = tipo.startsWith("audio/") || /\.(webm|mp3|m4a|ogg|wav|aac)$/.test(nome);
+
+      if (!ehImagem && !ehPdf && !ehAudio) {
+        rejeitados.push(`${arq.name || "arquivo"} (use imagem, PDF ou áudio)`);
         return;
       }
-      if (arq.size > limitePorArquivo) {
-        rejeitados.push(`${arq.name} (acima de 4 MB)`);
+      if (!ehImagem && arq.size > limitePorArquivo) {
+        rejeitados.push(`${arq.name || "arquivo"} (acima de 4 MB)`);
         return;
       }
       validos.push(arq);
@@ -1421,8 +1667,9 @@
 
     listaEl.innerHTML = anexosPreparados.map((a, idx) => {
       const kb = Math.max(1, Math.round(a.tamanho / 1024));
+      const icone = String(a.tipo || "").startsWith("audio/") ? "🎙️ " : "";
       return `<span class="badge bg-secondary me-1 mb-1">
-        ${escaparHTML(a.nome)} (${kb} KB)
+        ${icone}${escaparHTML(a.nome)} (${kb} KB)
         <button type="button" class="btn-close btn-close-white ms-1" style="font-size:0.6rem"
           aria-label="Remover" onclick="removerAnexo(${idx})"></button>
       </span>`;
@@ -1692,7 +1939,6 @@
     }
   }
 
-  // Tela de Solicitação: mantém apenas números e preenche NF + Fornecedor (NF-e 44 ou NFS-e 50)
   async function aoDigitarChaveSolicitacao() {
     const inputChave = document.getElementById("solChaveAcesso");
     const numeros = inputChave.value.replace(/\D/g, "");
@@ -1814,6 +2060,11 @@
   async function enviarSolicitacao(e) {
     e.preventDefault();
     pararCameraLeitor();
+    if (mediaRecorderAtual && mediaRecorderAtual.state === "recording") {
+      mostrarAlerta("Finalize ou cancele a gravação de áudio antes de enviar.", "warning");
+      return;
+    }
+
     const tipoSol = document.getElementById("solTipo").value;
     const btn = document.getElementById("btnSalvarSol");
     btn.disabled = true;

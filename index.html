@@ -143,7 +143,7 @@
         min-height: 200px;
       }
     }
-
+  
     @media print {
       body * {
         visibility: hidden !important;
@@ -163,6 +163,7 @@
         display: none !important;
       }
     }
+
   </style>
 </head>
 <body>
@@ -477,6 +478,7 @@
               <input type="text" class="form-control" id="solSolicitante" placeholder="Quem pediu / contato">
             </div>
 
+            <!-- Campo de Anexo opcional para QUALQUER solicitação (Múltiplos Arquivos, Câmera ou Gravação de Áudio) -->
             <div class="col-12" id="boxAnexoRecusa">
               <div class="border rounded-3 p-3 bg-light">
                 <div class="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-2">
@@ -861,6 +863,7 @@
   </div>
 </div>
 
+
 <!-- Modal de Impressão da Solicitação para o Setor -->
 <div class="modal fade" id="modalImprimirSolicitacao" tabindex="-1" aria-labelledby="modalImprimirSolicitacaoLabel" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
@@ -869,7 +872,9 @@
         <h5 class="modal-title" id="modalImprimirSolicitacaoLabel">🖨️ Ficha de Solicitação para o Setor</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fechar"></button>
       </div>
-      <div class="modal-body" id="areaImpressaoSolicitacao"></div>
+      <div class="modal-body" id="areaImpressaoSolicitacao">
+        <!-- Preenchido dinamicamente -->
+      </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
         <button type="button" class="btn btn-primary" onclick="executarImpressaoSolicitacao()">🖨️ Imprimir Agora</button>
@@ -880,6 +885,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+  // Cole aqui a URL da implantação do Google Apps Script (/exec)
   const API_URL = "https://script.google.com/macros/s/AKfycbzGwo-pqX_ZnJv8yJplbRgReJaUIZ-vLdL5OyJ-8fCdYZCkGwu4GwipEqvH64vBa_c5/exec";
   const API_TOKEN = "CrVcx7H88y7Eg9qAbjRIKidYSnCY6CNc";
 
@@ -902,8 +908,6 @@
   let modalAcompInstancia = null;
   let modalSolHistInstancia = null;
   let modalEditarSolInstancia = null;
-  let modalImprimirSolInstancia = null;
-  let protocoloParaImpressao = "";
 
   let mediaRecorderAtual = null;
   let chunksAudioGravado = [];
@@ -964,10 +968,6 @@
     const elModalEditSol = document.getElementById("modalEditarSolicitacao");
     if (elModalEditSol && window.bootstrap && bootstrap.Modal) {
       modalEditarSolInstancia = new bootstrap.Modal(elModalEditSol);
-    }
-    const elModalImpSol = document.getElementById("modalImprimirSolicitacao");
-    if (elModalImpSol && window.bootstrap && bootstrap.Modal) {
-      modalImprimirSolInstancia = new bootstrap.Modal(elModalImpSol);
     }
 
     carregarTabela();
@@ -2812,6 +2812,9 @@
     setTimeout(() => alerta.classList.add("d-none"), 6000);
   }
 
+  let modalImprimirSolInstancia = null;
+  let protocoloParaImpressao = "";
+
   function abrirModalImprimirSolicitacao(protocoloEncoded) {
     const protocolo = decodeURIComponent(protocoloEncoded);
     const sol = solicitacoesCache.find(s => String(s.protocolo).trim().toUpperCase() === String(protocolo).trim().toUpperCase());
@@ -2825,10 +2828,7 @@
     const areaEl = document.getElementById("areaImpressaoSolicitacao");
     if (!areaEl) return;
 
-    const anexos = Array.isArray(sol.anexos) ? sol.anexos : [];
-    const anexosHtml = anexos.length > 0
-      ? `<ul class="mb-0 ps-3">${anexos.map(a => `<li>${escaparHTML(a.nome)} — <span class="text-muted">${escaparHTML(a.url || "")}</span></li>`).join("")}</ul>`
-      : `<span class="text-muted">Nenhum anexo</span>`;
+    const ehDevolucao = String(sol.tipoSolicitacao || "").trim().toLowerCase().includes("devolu");
 
     const ult = sol.ultimoHistorico;
     const ultimoHistHtml = ult
@@ -2836,11 +2836,18 @@
          <div class="small text-muted">Contato: ${escaparHTML(ult.contato || "—")}${ult.observacao ? " — " + escaparHTML(ult.observacao) : ""}</div>`
       : `<span class="text-muted">Nenhum andamento registrado</span>`;
 
+    const vinculoDevolucaoHtml = ehDevolucao
+      ? `<div class="mb-3 small">
+          <div class="text-muted fw-semibold mb-1">Vínculo com Devolução / ERP</div>
+          <div>${sol.dadosIntegracao ? `<strong>${escaparHTML(sol.dadosIntegracao)}</strong>` : `<span class="text-muted">Sem devolução vinculada até o momento</span>`}</div>
+        </div>`
+      : "";
+
     areaEl.innerHTML = `
       <div class="border rounded-3 p-3">
         <div class="d-flex justify-content-between align-items-start border-bottom pb-2 mb-3 gap-2 flex-wrap">
           <div>
-            <h5 class="mb-1 fw-bold">FINCHA DE SOLICITAÇÃO</h5>
+            <h5 class="mb-1 fw-bold">SOLICITAÇÃO SOBRE NF DE FORNECEDOR / DEVOLUÇÃO</h5>
             <div class="small text-muted">Encaminhamento para Setor Responsável</div>
           </div>
           <div class="text-end">
@@ -2878,19 +2885,11 @@
           <div class="border rounded-2 p-2 bg-light small">${escaparHTML(sol.descricao || "Sem descrição informada.")}</div>
         </div>
 
-        <div class="mb-3 small">
-          <div class="text-muted fw-semibold mb-1">Vínculo com Devolução / ERP</div>
-          <div>${sol.dadosIntegracao ? `<strong>${escaparHTML(sol.dadosIntegracao)}</strong>` : `<span class="text-muted">Sem devolução vinculada até o momento</span>`}</div>
-        </div>
+        ${vinculoDevolucaoHtml}
 
         <div class="mb-3 small">
           <div class="text-muted fw-semibold mb-1">Último Andamento</div>
           <div>${ultimoHistHtml}</div>
-        </div>
-
-        <div class="mb-3 small">
-          <div class="text-muted fw-semibold mb-1">Anexos</div>
-          <div>${anexosHtml}</div>
         </div>
 
         <div class="border-top pt-3 mt-3 small">
@@ -2922,6 +2921,7 @@
   function executarImpressaoSolicitacao() {
     window.print();
   }
+
 </script>
 
 </body>
